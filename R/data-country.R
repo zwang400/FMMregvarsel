@@ -1,0 +1,30 @@
+#' Country Data
+#'
+#' Country profile data with 4 socio-economic and 3 public health indicators that
+#' measure the overall development of a country in 2019.
+#' The factors are chosen from the World Development Indicators (WDI) database of the World Bank.
+#'
+#' @format A data frame with 157 observations and 8 variables:
+#' \describe{
+#' \item{country_name}{country name}
+#' \item{gdppc}{The GDP per capita. Calculated as the Total GDP divided by the total population.}
+#' \item{health}{Current health expenditure (percentage of GDP). }
+#' \item{import}{Imports of goods and services (percentage of the GDP).}
+#' \item{income}{Adjusted net national income per capita (current USD).}
+#' \item{inflation}{Inflation, GDP deflator (annual percentage), the measurement of the annual growth rate of the total GDP.}
+#' \item{life_exp}{Life expectancy at birth, total (years). The average number of years a new born child would live if the current mortality patterns are to remain the same.}
+#' \item{total_fert}{Fertility rate, total (births per woman). The number of children that would be born to each woman if the current age-fertility rates remain the same.}
+#' }
+#'
+#' @note Due to the COVID-19 pandemic, the current database does not update health expenditure
+#' data after 2019, so we collect the data for all indicators of all countries in year 2019. This will
+#' exclude some important countries, eg, the United Kingdom, since the income data for UK is only updated through 2018.
+#' After removing countries with missing values in any of the indicators, 157 countries remain in the data.
+#'
+#' @source World Bank Open Data, https://data.worldbank.org/
+#'
+#' @examples
+#' country
+#' name_country <- country$country_name
+#'
+"country"

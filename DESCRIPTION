@@ -1,0 +1,30 @@
+Package: FMMregvarsel
+Type: Package
+Title: Bayesian Finite Mixure Regression Models with Cluster-Specific Variable Selections
+Version: 0.1.0
+Author: Zhen Wang
+Maintainer: Zhen Wang <zwangiowa@gmail.com>
+Description: Different MCMC algorithms for different Bayesian mixture regression models for clustering, variable selection and regression coeficcient estimations.
+Depends:
+    Matrix,
+    caret,
+    MCMCprecision,
+    truncdist,
+    faux,
+    mcclust.ext,
+    philentropy,
+    aricode,
+    gsl,
+    label.switching,
+    mclust,
+    clustvarsel,
+    coda,
+    flexmix,
+    BNPmix,
+    factoextra,
+    MASS,
+    R (>= 2.10)
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.1.1
