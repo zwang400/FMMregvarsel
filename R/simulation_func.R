@@ -1298,7 +1298,7 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
 
         #lilelihood function for the ith subject in the mth component
         group_member <- function(i, m, Beta, zeta, lambda, alpha, eta){
-            sum(dnorm(X[i,], zeta[m, ], sqrt(1/eta), log = T)) +
+            sum(dnorm(t(X[i,]), zeta[m, ], sqrt(1/eta), log = T)) +
                 dnorm(y[i], alpha[m] + X[i,]%*%Beta[m,], sqrt(1/lambda), log = T)
         }
 
