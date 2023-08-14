@@ -1,9 +1,15 @@
 ################################
 #sim functions
+#updated 23/08/13: update joint liklihood functions for the vectorized version
 ################################
-simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
+simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
                          gamma_fixed = 1, a_gamma = 10, b_gamma = 10, a_unif = 0,
                          #for h ~ Unif(a_unif, 1)
+                         algorithm = "MAR", prior = "Dirichlet",
+                         #algorithm can be "MAR" or "Con",
+                         #"Dynamic_FDMM" (a conditional algorithm for dynamic FDMM),
+                         #"MAR_Dir_MH" for the marginal algorithm of FDMM based on Miller-Harrison (2018, JASA)
+                         #prior can be "Dirichlet", "Bessel" or "Uniform" (unif not available for MAR yet)
                          a_w = 1, b_w = 1, Lambda = 3, a_bessel = 2,
                          b_bessel_hyperprior = TRUE, b_bessel_fixed = 1.1, a_b_bessel = 1, b_b_bessel = 10,
                          mu = 0, a_tau = 1, b_tau = 1, a_zeta = 0, b_zeta = 1,
@@ -15,7 +21,7 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
     #M_init, lambda_init are initial values of M and lambda
     n <- length(y)
     D <- ncol(X)
-    if(prior == "Dirichlet"){
+    if(algorithm == "Con" && prior == "Dirichlet"){
         #initializations
         U <- rep(1, N)
         M <- M_init
@@ -56,7 +62,7 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
 
         #group_member <- function(m, Beta, zeta, lambda, alpha, eta){
         #    dnorm(y, alpha[m] + X%*%Beta[m,], sqrt(1/lambda), log = T) +
-        #        apply(dnorm(X, zeta[m, ], sqrt(1/eta), log = T), 1, sum)
+        #        apply(dnorm(t(X), zeta[m, ], sqrt(1/eta), log = T), 2, sum)
         #}
 
         #log of posterior pdf of \gamma
@@ -211,7 +217,7 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
                         w_post = w_post, weight_post = weight_post, a_lambda = a_lambda, b_lambda = b_lambda,
                         a_eta = a_eta, b_eta = b_eta, X = X, y = y)
     }
-    if(prior == "Bessel"){
+    if(algorithm == "Con" && prior == "Bessel"){
         #initializations
         U <- rep(1, N)
         M <- M_init
@@ -253,7 +259,7 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
 
         #group_member <- function(m, Beta, zeta, lambda, alpha, eta){
         #    dnorm(y, alpha[m] + X%*%Beta[m,], sqrt(1/lambda), log = T) +
-        #        apply(dnorm(X, zeta[m, ], sqrt(1/eta), log = T), 1, sum)
+        #        apply(dnorm(t(X), zeta[m, ], sqrt(1/eta), log = T), 2, sum)
         #}
 
         #log-density, without the constant term
@@ -491,7 +497,244 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
                         w_post = w_post, weight_post = weight_post, a_lambda = a_lambda, b_lambda = b_lambda,
                         a_eta = a_eta, b_eta = b_eta, X = X, y = y)
     }
-    if(prior == "Dynamic_FDMM"){
+    if(algorithm == "Con" && prior == "Uniform"){
+        #initializations
+        U <- rep(1, N)
+        M <- M_init
+        S <- rep(1, M)
+        Beta <- matrix(rep(-0.1, D*M), ncol = D)
+        alpha <- rep(alpha_init, M)
+        zeta <- matrix(rep(1, D*M), ncol = D)
+        lambda <- lambda_init
+        eta <- 1
+        tau <- rep(1, D)
+        w <- rep(0, D)
+        c <- rep(0, n)
+        M_post <- rep(0, N)
+        k_post <- rep(0, N)
+        c_post <- matrix(0, ncol = n, nrow = N)
+        Beta_post <- list(0)
+        alpha_post <- list(0)
+        zeta_post <- list(0)
+        lambda_post <- rep(0, N)
+        eta_post <- rep(0, N)
+        weight_post <- list(0)
+        tau_post <- matrix(1, ncol = D, nrow = N)
+        w_post <- matrix(0.5, ncol = D, nrow = N)
+
+        group_member <- function(m, Beta, zeta, lambda, alpha, eta){
+            llkhd <- rep(0, n)
+            for(i in 1:n){
+                llkhd_x <- 0
+                for(j in 1:D){
+                    llkhd_x <- llkhd_x + dnorm(X[i,j], zeta[m, j], sqrt(1/eta), log = T)
+                }
+                llkhd[i] <- dnorm(y[i], alpha[m] + X[i,]%*%Beta[m,], sqrt(1/lambda), log = T) + llkhd_x
+            }
+            llkhd
+        }
+
+        #group_member <- function(m, Beta, zeta, lambda, alpha, eta){
+        #    dnorm(y, alpha[m] + X%*%Beta[m,], sqrt(1/lambda), log = T) +
+        #        apply(dnorm(t(X), zeta[m, ], sqrt(1/eta), log = T), 2, sum)
+        #}
+
+
+        for(i in 1:N){
+            #step 1
+            T <- sum(S)
+            u <- rgamma(1, n, T)
+            U[i] <- u
+
+            #step 2
+            mem_wgt <- matrix(0, nrow = n, ncol = M)
+            for(m in 1:M){
+                mem_wgt[ ,m] <- log(S[m]) + group_member(m, Beta, zeta, lambda, alpha, eta)
+            }
+
+            for(j in 1:n){
+                wgt_shift <- max(mem_wgt[j, ]) #exp normalization trick
+                c[j] <- sample(1:M, size = 1, prob = exp(mem_wgt[j, ] - wgt_shift) /
+                                   sum(exp(mem_wgt[j, ] - wgt_shift)))
+            }
+            unique_c <- unique(c)
+            k <- length(unique_c)
+            k_post[i] <- k
+            #relabeling
+            Beta <- Beta[unique_c, ]
+            zeta <- zeta[unique_c, ]
+            alpha <- alpha[unique_c]
+            b<-rep(0, n)
+            for(j in 1:k){
+                b[which(c == unique_c[j])] <- j
+            }
+            c <- b
+            c_post[i, ] <- c
+
+            #step 3a(need to further check)
+            psi_u <- (exp(-a_unif*u)-exp(-u))/u
+            p_pois <- Lambda*psi_u
+            p_coe <- Lambda*psi_u/(k+Lambda*psi_u)
+            p <- rbinom(1, 1, p_coe)
+            M_na <- ifelse(p == 0, rpois(1, p_pois), rpois(1, p_pois)+1)
+            M <- k + M_na
+            M_post[i] <- M
+
+            #step 3b(need to check if k < M, i.e., if M_na == 0)
+            S <- rep(1, M)
+            if(k == 1){
+                if(k < M){
+                    Beta <- rbind(Beta, matrix(0, nrow = M-k, ncol = D)) #fill in the M-k gap
+                    zeta <- rbind(zeta, matrix(0, nrow = M-k, ncol = D))
+                    alpha <- c(alpha, rep(0, M-k))
+                    for(m in 1:k){
+                        V_m <- which(c == m)
+                        S[m] <- rtrunc(1, spec="gamma", a=0, b=1, shape=length(V_m)+1, rate=u)
+                        for(d in 1:D){
+                            zeta[m, d] <- rnorm(1, (a_zeta * b_zeta + eta * sum(X[V_m, d]))/
+                                                    (eta * length(V_m) + b_zeta),
+                                                1/sqrt(eta * length(V_m) + b_zeta))
+                        }
+                        alpha[m] <- rnorm(1, (a_alpha*b_alpha + lambda*sum(y[V_m] - X[V_m,  , drop=F] %*% Beta[m, ]))/
+                                              (length(V_m) * lambda + b_alpha), 1/sqrt(length(V_m) * lambda + b_alpha))
+                        for(d in 1:D){
+                            C_md <- sqrt(tau/(tau + lambda*sum(X[V_m, d]^2)))*exp(-0.5*tau*mu^2)*
+                                exp(((mu*tau + lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*% Beta[m, -d])*
+                                                              X[V_m, d]))^2)/(2*(tau + lambda*sum(X[V_m, d]^2))))
+                            theta_md <- rbinom(1, 1, w[d]/(w[d] + (1 - w[d])*C_md))
+                            Beta[m, d] <- ifelse(theta_md == 1, 0, rnorm(1, (lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*%
+                                                                                             Beta[m, -d])*X[V_m, d]) +
+                                                                                 mu * tau)/(tau + lambda*sum(X[V_m, d]^2)),
+                                                                         1/sqrt(tau + lambda*sum(X[V_m, d]^2))))
+                        }
+                    }
+                    for(m in (k+1):M){
+                        S[m] <- rtrunc(1, spec="exp", a=0, b=1, rate=u)
+                        for(d in 1:D){
+                            p_w <- rbinom(1, 1, w[d])
+                            Beta[m, d] <- ifelse(p_w == 1, 0, rnorm(1, mu, 1/sqrt(tau)))
+                        }
+                        zeta[m, ] <- rnorm(D, a_zeta, 1/sqrt(b_zeta))
+                    }
+                    alpha[(k+1):M] <- rnorm(M-k, a_alpha, 1/sqrt(b_alpha))
+                }
+                else{
+                    Beta <- matrix(Beta, nrow = 1)
+                    zeta <- matrix(zeta, nrow = 1)
+                    for(m in 1:k){
+                        V_m <- which(c == m)
+                        S[m] <- rtrunc(1, spec="gamma", a=0, b=1, shape=length(V_m)+1, rate=u)
+                        for(d in 1:D){
+                            zeta[m, d] <- rnorm(1, (a_zeta * b_zeta + eta * sum(X[V_m, d]))/
+                                                    (eta * length(V_m) + b_zeta),
+                                                1/sqrt(eta * length(V_m) + b_zeta))
+                        }
+                        alpha[m] <- rnorm(1, (a_alpha*b_alpha + lambda*sum(y[V_m] - X[V_m,  , drop=F] %*% Beta[m, ]))/
+                                              (length(V_m) * lambda + b_alpha), 1/sqrt(length(V_m) * lambda + b_alpha))
+                        for(d in 1:D){
+                            C_md <- sqrt(tau/(tau + lambda*sum(X[V_m, d]^2)))*exp(-0.5*tau*mu^2)*
+                                exp(((mu*tau + lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*% Beta[m, -d])*
+                                                              X[V_m, d]))^2)/(2*(tau + lambda*sum(X[V_m, d]^2))))
+                            theta_md <- rbinom(1, 1, w[d]/(w[d] + (1 - w[d])*C_md))
+                            Beta[m, d] <- ifelse(theta_md == 1, 0, rnorm(1, (lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*%
+                                                                                             Beta[m, -d])*X[V_m, d]) +
+                                                                                 mu * tau)/(tau + lambda*sum(X[V_m, d]^2)),
+                                                                         1/sqrt(tau + lambda*sum(X[V_m, d]^2))))
+                        }
+                    }
+                }
+            }
+            else if(k < M){
+                Beta <- rbind(Beta, matrix(0, nrow = M-k, ncol = D)) #fill in the M-k gap
+                zeta <- rbind(zeta, matrix(0, nrow = M-k, ncol = D))
+                alpha <- c(alpha, rep(0, M-k))
+                for(m in 1:k){
+                    V_m <- which(c == m)
+                    S[m] <- rtrunc(1, spec="gamma", a=0, b=1, shape=length(V_m)+1, rate=u)
+                    for(d in 1:D){
+                        zeta[m, d] <- rnorm(1, (a_zeta * b_zeta + eta * sum(X[V_m, d]))/
+                                                (eta * length(V_m) + b_zeta),
+                                            1/sqrt(eta * length(V_m) + b_zeta))
+                    }
+                    alpha[m] <- rnorm(1, (a_alpha*b_alpha + lambda*sum(y[V_m] - X[V_m,  , drop=F] %*% Beta[m, ]))/
+                                          (length(V_m) * lambda + b_alpha), 1/sqrt(length(V_m) * lambda + b_alpha))
+                    for(d in 1:D){
+                        C_md <- sqrt(tau/(tau + lambda*sum(X[V_m, d]^2)))*exp(-0.5*tau*mu^2)*
+                            exp(((mu*tau + lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*% Beta[m, -d])*
+                                                          X[V_m, d]))^2)/(2*(tau + lambda*sum(X[V_m, d]^2))))
+                        theta_md <- rbinom(1, 1, w[d]/(w[d] + (1 - w[d])*C_md))
+                        Beta[m, d] <- ifelse(theta_md == 1, 0, rnorm(1, (lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*%
+                                                                                         Beta[m, -d])*X[V_m, d]) +
+                                                                             mu * tau)/(tau + lambda*sum(X[V_m, d]^2)),
+                                                                     1/sqrt(tau + lambda*sum(X[V_m, d]^2))))
+                    }
+                }
+                for(m in (k+1):M){
+                    S[m] <- rtrunc(1, spec="exp", a=0, b=1, rate=u)
+                    for(d in 1:D){
+                        p_w <- rbinom(1, 1, w[d])
+                        Beta[m, d] <- ifelse(p_w == 1, 0, rnorm(1, mu, 1/sqrt(tau)))
+                    }
+                    zeta[m, ] <- rnorm(D, a_zeta, 1/sqrt(b_zeta))
+                }
+                alpha[(k+1):M] <- rnorm(M-k, a_alpha, 1/sqrt(b_alpha))
+            }
+            else{
+                for(m in 1:k){
+                    V_m <- which(c == m)
+                    S[m] <- rtrunc(1, spec="gamma", a=0, b=1, shape=length(V_m)+1, rate=u)
+                    for(d in 1:D){
+                        zeta[m, d] <- rnorm(1, (a_zeta * b_zeta + eta * sum(X[V_m, d]))/
+                                                (eta * length(V_m) + b_zeta),
+                                            1/sqrt(eta * length(V_m) + b_zeta))
+                    }
+                    alpha[m] <- rnorm(1, (a_alpha*b_alpha + lambda*sum(y[V_m] - X[V_m,  , drop=F] %*% Beta[m, ]))/
+                                          (length(V_m) * lambda + b_alpha), 1/sqrt(length(V_m) * lambda + b_alpha))
+                    for(d in 1:D){
+                        C_md <- sqrt(tau/(tau + lambda*sum(X[V_m, d]^2)))*exp(-0.5*tau*mu^2)*
+                            exp(((mu*tau + lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*% Beta[m, -d])*
+                                                          X[V_m, d]))^2)/(2*(tau + lambda*sum(X[V_m, d]^2))))
+                        theta_md <- rbinom(1, 1, w[d]/(w[d] + (1 - w[d])*C_md))
+                        Beta[m, d] <- ifelse(theta_md == 1, 0, rnorm(1, (lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*%
+                                                                                         Beta[m, -d])*X[V_m, d]) +
+                                                                             mu * tau)/(tau + lambda*sum(X[V_m, d]^2)),
+                                                                     1/sqrt(tau + lambda*sum(X[V_m, d]^2))))
+                    }
+                }
+            }
+
+            #sample \lambda and \eta
+            lambda <- rgamma(1, a_lambda + n/2, b_lambda + sum((y-alpha[c]-apply(Beta[c,]*X, 1, sum))^2)/2)
+            eta <- rgamma(1, a_eta + n*D/2, b_eta + sum((X - zeta[c,])^2)/2)
+
+            #update \tau and w
+            if(SS == TRUE){
+                for(d in 1:D){
+                    w[d] <- rbeta(1, a_w + sum(Beta[,d] == 0), b_w + sum(Beta[,d] != 0))
+                }
+            }
+
+            for(d in 1:D){
+                nd_Plus <- sum(Beta[,d] != 0)
+                tau[d] <- rgamma(1, a_tau + nd_Plus/2, b_tau +sum(Beta[,d]^2)/2)
+            }
+
+            Beta_post[[i]] <- as.vector(Beta)
+            alpha_post[[i]] <- alpha
+            zeta_post[[i]] <- as.vector(zeta)
+            lambda_post[i] <- lambda
+            eta_post[i] <- eta
+            tau_post[i,] <- tau
+            w_post[i,] <- w
+            weight_post[[i]] <- S/sum(S)
+        }
+        sim_res <- list(M_post = M_post, c_post = c_post, k_post = k_post, U = U,
+                        Beta_post = Beta_post, alpha_post = alpha_post, zeta_post = zeta_post,
+                        lambda_post = lambda_post, eta_post = eta_post, tau_post = tau_post,
+                        w_post = w_post, weight_post = weight_post, a_lambda = a_lambda, b_lambda = b_lambda,
+                        a_eta = a_eta, b_eta = b_eta, X = X, y = y)
+    }
+    if(algorithm == "Dynamic_FDMM"){
         #initializations
         U <- rep(1, N)
         M <- M_init
@@ -532,7 +775,7 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
 
         #group_member <- function(m, Beta, zeta, lambda, alpha, eta){
         #    dnorm(y, alpha[m] + X%*%Beta[m,], sqrt(1/lambda), log = T) +
-        #        apply(dnorm(X, zeta[m, ], sqrt(1/eta), log = T), 1, sum)
+        #        apply(dnorm(t(X), zeta[m, ], sqrt(1/eta), log = T), 2, sum)
         #}
 
 
@@ -770,7 +1013,8 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
                         w_post = w_post, weight_post = weight_post, a_lambda = a_lambda, b_lambda = b_lambda,
                         a_eta = a_eta, b_eta = b_eta, X = X, y = y)
     }
-    if(prior == "Dirichlet_Marginal"){
+    if(algorithm == "MAR_Dir_MH"){
+        #update step i of updating c, 2023-04-20
         #initializations
         k <- M_init
         Beta <- matrix(rep(-0.1, D*k), ncol = D)
@@ -796,7 +1040,7 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
         u <- 1
 
         group_member <- function(i, m, Beta, zeta, lambda, alpha, eta){
-            sum(dnorm(X[i,1:D], zeta[m, 1:D], sqrt(1/eta), log = T)) +
+            sum(dnorm(X[i,], zeta[m, ], sqrt(1/eta), log = T)) +
                 dnorm(y[i], alpha[m] + X[i,]%*%Beta[m,], sqrt(1/lambda), log = T)
         }
 
@@ -851,12 +1095,12 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
             }
 
             #step 1, update c
+            c_size <- as.vector(table(c))
             for(j in 1:n){
-                c_minus <- c[-j]
-                cj <- c[j]
-                k_minus <- length(unique(c_minus))
+                k_c <- length(c_size)
+                k_minus <- ifelse(c_size[c[j]] == 1, k_c-1, k_c)
                 h <- k_minus + L_dynamic
-                if(sum(c_minus == cj) > 0){
+                if(c_size[c[j]] > 1){
                     #extend Beta, zeta and alpha
                     Beta_ext <- matrix(0, ncol = D, nrow = L_dynamic)
                     for(mm in 1:L_dynamic){
@@ -868,8 +1112,11 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
                     Beta <- rbind(Beta, Beta_ext)
                     zeta <- rbind(zeta, zeta_ext)
                     alpha <- c(alpha, alpha_ext)
+
+                    #update cluster sizes after removing jthe subject
+                    n_size <- c_size
+                    n_size[c[j]] <- c_size[c[j]]-1
                 }else{
-                    c[j] <- k_minus + 1
                     Beta_ext <- matrix(0, ncol = D, nrow = (L_dynamic-1))
                     for(mm in 1:(L_dynamic-1)){
                         pp_w <- rbinom(D, 1, w)
@@ -878,13 +1125,16 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
                     zeta_ext <- matrix(rnorm(D*(L_dynamic-1), a_zeta, 1/sqrt(b_zeta)), ncol = D)
                     alpha_ext <- rnorm(L_dynamic-1, a_alpha, 1/sqrt(b_alpha))
 
-                    #need to relabel first
-                    b<-rep(0, n-1)
-                    for(kk in 1:k_minus){
-                        b[which(c_minus == unique(c_minus)[kk])] <- kk
+                    #update cluster sizes
+                    if(c[j] < max(c)){
+                        c_size[c[j]: (k_c-1)] <- c_size[(c[j]+1) : k_c]
+                        c_size[k_c] <- 1
                     }
-                    c_minus <- b
-                    c[-j] <- c_minus
+
+                    #re-labeling
+                    c[which(c > c[j])] <- c[which(c > c[j])] - 1
+                    c[j] <- k_minus+1
+                    cj <- c[j]
 
                     Beta_ord <- rbind(Beta[-cj, ], Beta[cj, ])
                     zeta_ord <- rbind(zeta[-cj, ], zeta[cj, ])
@@ -892,27 +1142,39 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
                     Beta <- rbind(Beta_ord, Beta_ext)
                     zeta <- rbind(zeta_ord, zeta_ext)
                     alpha <- c(alpha_ord, alpha_ext)
-                }
 
-                #size for existing clusters
-                n_size<- as.numeric(table(c_minus))
+                    #update cluster sizes after removing jthe subject
+                    n_size <- c_size[1:k_minus]
+                }
 
                 #calculating joint mixture density
                 mix_den <- rep(0, h)
                 for(hh in 1:h){
                     mix_den[hh] <- group_member(j, hh, Beta, zeta, lambda, alpha, eta)
                 }
+
+                #calculate llkhood for ith subject
                 mem_wgt <- rep(0, h)
                 mem_wgt[1:k_minus] <- log(n_size + gamma) + mix_den[1:k_minus]
                 ratio_term <- ifelse(k_minus > pre_comp_terms, V_t_tp1(n, k_minus, gamma, Lambda), v_n_t_ratio[k_minus])
                 mem_wgt[(k_minus+1):h] <- ratio_term + log(gamma) + mix_den[(k_minus+1):h] - log(L_dynamic)
                 mem_shift <- max(mem_wgt)
+
+                #update c[j], using normalization trick
                 c[j] <- sample(1:h, size = 1, prob =
                                    exp(mem_wgt - mem_shift)/ sum(exp(mem_wgt - mem_shift)))
                 if(c[j] > k_minus){
                     c[j] <- k_minus + 1
+
+                    #update cluster sizes
+                    c_size <- c(n_size, 1)
+                }else{
+                    #update cluster sizes
+                    c_size <- n_size
+                    c_size[c[j]] <- n_size[c[j]]+1
                 }
             }
+
             unique_c <- unique(c)
             k <- length(unique_c)
             k_post[i] <- k
@@ -1007,20 +1269,20 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
                         w_post = w_post, u_post = u_post, a_lambda = a_lambda, b_lambda = b_lambda,
                         a_eta = a_eta, b_eta = b_eta, X = X, y = y)
     }
-    if(prior == "Uniform"){
+    if(algorithm == "MAR"){
         #initializations
-        U <- rep(1, N)
-        M <- M_init
-        S <- rep(1, M)
-        Beta <- matrix(rep(-0.1, D*M), ncol = D)
-        alpha <- rep(alpha_init, M)
-        zeta <- matrix(rep(1, D*M), ncol = D)
+        k <- M_init
+        Beta <- matrix(rep(-0.1, D*k), ncol = D)
+        alpha <- rep(alpha_init, k)
+        zeta <- matrix(rep(1, D*k), ncol = D)
         lambda <- lambda_init
         eta <- 1
+        u <- 1
+        gamma <- gamma_fixed
+        b_bessel <- b_bessel_fixed
         tau <- rep(1, D)
         w <- rep(0, D)
-        c <- rep(0, n)
-        M_post <- rep(0, N)
+        c <- sample(1:k, n, replace = T)
         k_post <- rep(0, N)
         c_post <- matrix(0, ncol = n, nrow = N)
         Beta_post <- list(0)
@@ -1028,45 +1290,179 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
         zeta_post <- list(0)
         lambda_post <- rep(0, N)
         eta_post <- rep(0, N)
-        weight_post <- list(0)
+        u_post <- rep(0, N)
+        gamma_post <- rep(1, N)
         tau_post <- matrix(1, ncol = D, nrow = N)
         w_post <- matrix(0.5, ncol = D, nrow = N)
+        b_bessel_post <- rep(1, N)
 
-        group_member <- function(m, Beta, zeta, lambda, alpha, eta){
-            llkhd <- rep(0, n)
-            for(i in 1:n){
-                llkhd_x <- 0
-                for(j in 1:D){
-                    llkhd_x <- llkhd_x + dnorm(X[i,j], zeta[m, j], sqrt(1/eta), log = T)
-                }
-                llkhd[i] <- dnorm(y[i], alpha[m] + X[i,]%*%Beta[m,], sqrt(1/lambda), log = T) + llkhd_x
-            }
-            llkhd
+        #lilelihood function for the ith subject in the mth component
+        group_member <- function(i, m, Beta, zeta, lambda, alpha, eta){
+            sum(dnorm(X[i,], zeta[m, ], sqrt(1/eta), log = T)) +
+                dnorm(y[i], alpha[m] + X[i,]%*%Beta[m,], sqrt(1/lambda), log = T)
         }
 
-        #group_member <- function(m, Beta, zeta, lambda, alpha, eta){
-        #    dnorm(y, alpha[m] + X%*%Beta[m,], sqrt(1/lambda), log = T) +
-        #        apply(dnorm(X, zeta[m, ], sqrt(1/eta), log = T), 1, sum)
-        #}
+        #log of posterior pdf of \gamma of FDMM
+        log.pdf.gamma <- function(gamma, Lambda, u, a_gamma, b_gamma, cluster_size){
+            k <- length(cluster_size)
+            psi <- 1/((1+u)^gamma)
+            log(Lambda*psi + k) + Lambda*psi + k*log(psi) + (a_gamma-1)*log(gamma) - b_gamma*gamma +
+                sum(lgamma(gamma+cluster_size) - lgamma(gamma))
+        }
 
+
+        #log pdf of \beta - 1 of FBMM
+        pdf.b.bel <- function(bb_bessel, a_bessel, Lambda, u, a_b_bessel, b_b_bessel, cluster_size){
+            k <- length(cluster_size)
+            b_bessel <- bb_bessel + 1
+            log_psi <- a_bessel*(log(b_bessel+sqrt(b_bessel^2-1)) - log(b_bessel+u+sqrt((b_bessel+u)^2-1)))
+            res <- log(Lambda*exp(log_psi) + k) + Lambda*exp(log_psi) + (a_b_bessel-1)*log(bb_bessel) -
+                b_b_bessel*bb_bessel
+            for(j in 1:k){
+                res <- res + log(a_bessel) + a_bessel*log(b_bessel+sqrt(b_bessel^2-1)) - a_bessel*log(2) -
+                    (cluster_size[j]+a_bessel)*log(u+b_bessel) + lgamma(a_bessel + cluster_size[j]) - lgamma(a_bessel + 1) +
+                    log(hyperg_2F1((cluster_size[j] + a_bessel)/2, (cluster_size[j] + a_bessel + 1)/2,
+                                   a_bessel + 1, (u + b_bessel)^(-2)))
+            }
+            res
+        }
+
+        #log of psi
+        log_small_psi <- function(u, prior){
+            if(prior == "Dirichlet"){
+                -gamma*log(u+1)
+            }else if(prior == "Bessel"){
+                a_bessel*(log(b_bessel+sqrt(b_bessel^2-1)) - log(b_bessel+u+sqrt((b_bessel+u)^2-1)))
+            }else{
+                NA
+            }
+        }
+
+        #log of the Psi
+        log_big_psi <- function(Lambda, small_psi, k){
+            (k-1)*log(Lambda) + log(Lambda*small_psi + k) + Lambda*(small_psi - 1)
+        }
+
+        #log of kappa
+        log_kappa <- function(n_par, u, prior){
+            if(prior == "Dirichlet"){
+                lgamma(gamma+n_par) - lgamma(gamma) - (gamma+n_par)*log(1+u)
+            }else if(prior == "Bessel"){
+                log(a_bessel) + a_bessel*log(b_bessel+sqrt(b_bessel^2-1)) - a_bessel*log(2) -
+                    (n_par+a_bessel)*log(u+b_bessel) + lgamma(a_bessel + n_par) - lgamma(a_bessel + 1) +
+                    log(hyperg_2F1((n_par + a_bessel)/2, (n_par + a_bessel + 1)/2,
+                                   a_bessel + 1, (u + b_bessel)^(-2)))
+            }else{
+                NA
+            }
+        }
+
+        #log of ratio of kappa in updating c
+        log_ratio_kappa <- function(n_par, u, prior){
+            if(prior == "Dirichlet"){
+                log(n_par + gamma) - log(1+u)
+            }else if(prior == "Bessel"){
+                log(a_bessel + n_par) - log(u + b_bessel) +
+                    log(hyperg_2F1((n_par + 1 + a_bessel)/2, (n_par + 1 + a_bessel + 1)/2,
+                                   a_bessel + 1, (u + b_bessel)^(-2))) -
+                    log(hyperg_2F1((n_par + a_bessel)/2, (n_par + a_bessel + 1)/2,
+                                   a_bessel + 1, (u + b_bessel)^(-2)))
+            }else{
+                NA
+            }
+        }
+
+        #log pdf of u
+        log.pdf.u <- function(n, Lambda, u, cluster_size, prior){
+            k <- length(cluster_size)
+            small_psi <- exp(log_small_psi(u, prior))
+            log_big_psi_value <- log_big_psi(Lambda, small_psi, k)
+            (n-1)*log(u) + log_big_psi_value + sum(log_kappa(cluster_size, u, prior))
+        }
 
         for(i in 1:N){
-            #step 1
-            T <- sum(S)
-            u <- rgamma(1, n, T)
-            U[i] <- u
-
-            #step 2
-            mem_wgt <- matrix(0, nrow = n, ncol = M)
-            for(m in 1:M){
-                mem_wgt[ ,m] <- log(S[m]) + group_member(m, Beta, zeta, lambda, alpha, eta)
-            }
-
+            #step 1, update c
+            c_size <- as.vector(table(c))
             for(j in 1:n){
-                wgt_shift <- max(mem_wgt[j, ]) #exp normalization trick
-                c[j] <- sample(1:M, size = 1, prob = exp(mem_wgt[j, ] - wgt_shift) /
-                                   sum(exp(mem_wgt[j, ] - wgt_shift)))
+                k_c <- length(c_size)
+                k_minus <- ifelse(c_size[c[j]] == 1, k_c-1, k_c)
+                h <- k_minus + L_dynamic
+                if(c_size[c[j]] > 1){
+                    #extend Beta, zeta and alpha
+                    Beta_ext <- matrix(0, ncol = D, nrow = L_dynamic)
+                    for(mm in 1:L_dynamic){
+                        pp_w <- rbinom(D, 1, w)
+                        Beta_ext[mm,] <- ifelse(pp_w == 1, rep(0, D), rnorm(D, mu, 1/sqrt(tau)))
+                    }
+                    zeta_ext <- matrix(rnorm(D*L_dynamic, a_zeta, 1/sqrt(b_zeta)), ncol = D)
+                    alpha_ext <- rnorm(L_dynamic, a_alpha, 1/sqrt(b_alpha))
+                    Beta <- rbind(Beta, Beta_ext)
+                    zeta <- rbind(zeta, zeta_ext)
+                    alpha <- c(alpha, alpha_ext)
+
+                    #update cluster sizes after removing jthe subject
+                    n_size <- c_size
+                    n_size[c[j]] <- c_size[c[j]]-1
+                }else{
+                    Beta_ext <- matrix(0, ncol = D, nrow = (L_dynamic-1))
+                    for(mm in 1:(L_dynamic-1)){
+                        pp_w <- rbinom(D, 1, w)
+                        Beta_ext[mm,] <- ifelse(pp_w == 1, rep(0, D), rnorm(D, mu, 1/sqrt(tau)))
+                    }
+                    zeta_ext <- matrix(rnorm(D*(L_dynamic-1), a_zeta, 1/sqrt(b_zeta)), ncol = D)
+                    alpha_ext <- rnorm(L_dynamic-1, a_alpha, 1/sqrt(b_alpha))
+
+                    #update cluster sizes
+                    if(c[j] < max(c)){
+                        c_size[c[j]: (k_c-1)] <- c_size[(c[j]+1) : k_c]
+                        c_size[k_c] <- 1
+                    }
+
+                    #re-labeling
+                    c[which(c > c[j])] <- c[which(c > c[j])] - 1
+                    c[j] <- k_minus+1
+                    cj <- c[j]
+
+                    Beta_ord <- rbind(Beta[-cj, ], Beta[cj, ])
+                    zeta_ord <- rbind(zeta[-cj, ], zeta[cj, ])
+                    alpha_ord <- c(alpha[-cj], alpha[cj])
+                    Beta <- rbind(Beta_ord, Beta_ext)
+                    zeta <- rbind(zeta_ord, zeta_ext)
+                    alpha <- c(alpha_ord, alpha_ext)
+
+                    #update cluster sizes after removing jthe subject
+                    n_size <- c_size[1:k_minus]
+                }
+
+                #calculating joint mixture density
+                mix_den <- rep(0, h)
+                for(hh in 1:h){
+                    mix_den[hh] <- group_member(j, hh, Beta, zeta, lambda, alpha, eta)
+                }
+
+                #calculate llkhood for ith subject
+                mem_wgt <- rep(0, h)
+                small_psi_u <- exp(log_small_psi(u, prior))
+                log_ratio_Psi <- log(Lambda) + log(Lambda*small_psi_u + k_minus + 1) - log(Lambda*small_psi_u + k_minus)
+                mem_wgt[1:k_minus] <- log_ratio_kappa(n_size, u, prior) + mix_den[1:k_minus]
+                mem_wgt[(k_minus+1):h] <- log_ratio_Psi + log_kappa(1, u, prior) + mix_den[(k_minus+1):h] - log(L_dynamic)
+                mem_shift <- max(mem_wgt)
+
+                #update c[j], using normalization trick
+                c[j] <- sample(1:h, size = 1, prob =
+                                   exp(mem_wgt - mem_shift)/ sum(exp(mem_wgt - mem_shift)))
+                if(c[j] > k_minus){
+                    c[j] <- k_minus + 1
+
+                    #update cluster sizes
+                    c_size <- c(n_size, 1)
+                }else{
+                    #update cluster sizes
+                    c_size <- n_size
+                    c_size[c[j]] <- n_size[c[j]]+1
+                }
             }
+
             unique_c <- unique(c)
             k <- length(unique_c)
             k_post[i] <- k
@@ -1081,135 +1477,29 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
             c <- b
             c_post[i, ] <- c
 
-            #step 3a(need to further check)
-            psi_u <- (exp(-a_unif*u)-exp(-u))/u
-            p_pois <- Lambda*psi_u
-            p_coe <- Lambda*psi_u/(k+Lambda*psi_u)
-            p <- rbinom(1, 1, p_coe)
-            M_na <- ifelse(p == 0, rpois(1, p_pois), rpois(1, p_pois)+1)
-            M <- k + M_na
-            M_post[i] <- M
-
-            #step 3b(need to check if k < M, i.e., if M_na == 0)
-            S <- rep(1, M)
+            #update \theta
             if(k == 1){
-                if(k < M){
-                    Beta <- rbind(Beta, matrix(0, nrow = M-k, ncol = D)) #fill in the M-k gap
-                    zeta <- rbind(zeta, matrix(0, nrow = M-k, ncol = D))
-                    alpha <- c(alpha, rep(0, M-k))
-                    for(m in 1:k){
-                        V_m <- which(c == m)
-                        S[m] <- rtrunc(1, spec="gamma", a=0, b=1, shape=length(V_m)+1, rate=u)
-                        for(d in 1:D){
-                            zeta[m, d] <- rnorm(1, (a_zeta * b_zeta + eta * sum(X[V_m, d]))/
-                                                    (eta * length(V_m) + b_zeta),
-                                                1/sqrt(eta * length(V_m) + b_zeta))
-                        }
-                        alpha[m] <- rnorm(1, (a_alpha*b_alpha + lambda*sum(y[V_m] - X[V_m,  , drop=F] %*% Beta[m, ]))/
-                                              (length(V_m) * lambda + b_alpha), 1/sqrt(length(V_m) * lambda + b_alpha))
-                        for(d in 1:D){
-                            C_md <- sqrt(tau/(tau + lambda*sum(X[V_m, d]^2)))*exp(-0.5*tau*mu^2)*
-                                exp(((mu*tau + lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*% Beta[m, -d])*
-                                                              X[V_m, d]))^2)/(2*(tau + lambda*sum(X[V_m, d]^2))))
-                            theta_md <- rbinom(1, 1, w[d]/(w[d] + (1 - w[d])*C_md))
-                            Beta[m, d] <- ifelse(theta_md == 1, 0, rnorm(1, (lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*%
-                                                                                             Beta[m, -d])*X[V_m, d]) +
-                                                                                 mu * tau)/(tau + lambda*sum(X[V_m, d]^2)),
-                                                                         1/sqrt(tau + lambda*sum(X[V_m, d]^2))))
-                        }
-                    }
-                    for(m in (k+1):M){
-                        S[m] <- rtrunc(1, spec="exp", a=0, b=1, rate=u)
-                        for(d in 1:D){
-                            p_w <- rbinom(1, 1, w[d])
-                            Beta[m, d] <- ifelse(p_w == 1, 0, rnorm(1, mu, 1/sqrt(tau)))
-                        }
-                        zeta[m, ] <- rnorm(D, a_zeta, 1/sqrt(b_zeta))
-                    }
-                    alpha[(k+1):M] <- rnorm(M-k, a_alpha, 1/sqrt(b_alpha))
-                }
-                else{
-                    Beta <- matrix(Beta, nrow = 1)
-                    zeta <- matrix(zeta, nrow = 1)
-                    for(m in 1:k){
-                        V_m <- which(c == m)
-                        S[m] <- rtrunc(1, spec="gamma", a=0, b=1, shape=length(V_m)+1, rate=u)
-                        for(d in 1:D){
-                            zeta[m, d] <- rnorm(1, (a_zeta * b_zeta + eta * sum(X[V_m, d]))/
-                                                    (eta * length(V_m) + b_zeta),
-                                                1/sqrt(eta * length(V_m) + b_zeta))
-                        }
-                        alpha[m] <- rnorm(1, (a_alpha*b_alpha + lambda*sum(y[V_m] - X[V_m,  , drop=F] %*% Beta[m, ]))/
-                                              (length(V_m) * lambda + b_alpha), 1/sqrt(length(V_m) * lambda + b_alpha))
-                        for(d in 1:D){
-                            C_md <- sqrt(tau/(tau + lambda*sum(X[V_m, d]^2)))*exp(-0.5*tau*mu^2)*
-                                exp(((mu*tau + lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*% Beta[m, -d])*
-                                                              X[V_m, d]))^2)/(2*(tau + lambda*sum(X[V_m, d]^2))))
-                            theta_md <- rbinom(1, 1, w[d]/(w[d] + (1 - w[d])*C_md))
-                            Beta[m, d] <- ifelse(theta_md == 1, 0, rnorm(1, (lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*%
-                                                                                             Beta[m, -d])*X[V_m, d]) +
-                                                                                 mu * tau)/(tau + lambda*sum(X[V_m, d]^2)),
-                                                                         1/sqrt(tau + lambda*sum(X[V_m, d]^2))))
-                        }
-                    }
-                }
+                Beta <- matrix(Beta, nrow = 1)
+                zeta <- matrix(zeta, nrow = 1)
             }
-            else if(k < M){
-                Beta <- rbind(Beta, matrix(0, nrow = M-k, ncol = D)) #fill in the M-k gap
-                zeta <- rbind(zeta, matrix(0, nrow = M-k, ncol = D))
-                alpha <- c(alpha, rep(0, M-k))
-                for(m in 1:k){
-                    V_m <- which(c == m)
-                    S[m] <- rtrunc(1, spec="gamma", a=0, b=1, shape=length(V_m)+1, rate=u)
-                    for(d in 1:D){
-                        zeta[m, d] <- rnorm(1, (a_zeta * b_zeta + eta * sum(X[V_m, d]))/
-                                                (eta * length(V_m) + b_zeta),
-                                            1/sqrt(eta * length(V_m) + b_zeta))
-                    }
-                    alpha[m] <- rnorm(1, (a_alpha*b_alpha + lambda*sum(y[V_m] - X[V_m,  , drop=F] %*% Beta[m, ]))/
-                                          (length(V_m) * lambda + b_alpha), 1/sqrt(length(V_m) * lambda + b_alpha))
-                    for(d in 1:D){
-                        C_md <- sqrt(tau/(tau + lambda*sum(X[V_m, d]^2)))*exp(-0.5*tau*mu^2)*
-                            exp(((mu*tau + lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*% Beta[m, -d])*
-                                                          X[V_m, d]))^2)/(2*(tau + lambda*sum(X[V_m, d]^2))))
-                        theta_md <- rbinom(1, 1, w[d]/(w[d] + (1 - w[d])*C_md))
-                        Beta[m, d] <- ifelse(theta_md == 1, 0, rnorm(1, (lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*%
-                                                                                         Beta[m, -d])*X[V_m, d]) +
-                                                                             mu * tau)/(tau + lambda*sum(X[V_m, d]^2)),
-                                                                     1/sqrt(tau + lambda*sum(X[V_m, d]^2))))
-                    }
+            for(m in 1:k){
+                V_m <- which(c == m)
+                for(d in 1:D){
+                    zeta[m, d] <- rnorm(1, (a_zeta * b_zeta + eta * sum(X[V_m, d]))/
+                                            (eta * length(V_m) + b_zeta),
+                                        1/sqrt(eta * length(V_m) + b_zeta))
                 }
-                for(m in (k+1):M){
-                    S[m] <- rtrunc(1, spec="exp", a=0, b=1, rate=u)
-                    for(d in 1:D){
-                        p_w <- rbinom(1, 1, w[d])
-                        Beta[m, d] <- ifelse(p_w == 1, 0, rnorm(1, mu, 1/sqrt(tau)))
-                    }
-                    zeta[m, ] <- rnorm(D, a_zeta, 1/sqrt(b_zeta))
-                }
-                alpha[(k+1):M] <- rnorm(M-k, a_alpha, 1/sqrt(b_alpha))
-            }
-            else{
-                for(m in 1:k){
-                    V_m <- which(c == m)
-                    S[m] <- rtrunc(1, spec="gamma", a=0, b=1, shape=length(V_m)+1, rate=u)
-                    for(d in 1:D){
-                        zeta[m, d] <- rnorm(1, (a_zeta * b_zeta + eta * sum(X[V_m, d]))/
-                                                (eta * length(V_m) + b_zeta),
-                                            1/sqrt(eta * length(V_m) + b_zeta))
-                    }
-                    alpha[m] <- rnorm(1, (a_alpha*b_alpha + lambda*sum(y[V_m] - X[V_m,  , drop=F] %*% Beta[m, ]))/
-                                          (length(V_m) * lambda + b_alpha), 1/sqrt(length(V_m) * lambda + b_alpha))
-                    for(d in 1:D){
-                        C_md <- sqrt(tau/(tau + lambda*sum(X[V_m, d]^2)))*exp(-0.5*tau*mu^2)*
-                            exp(((mu*tau + lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*% Beta[m, -d])*
-                                                          X[V_m, d]))^2)/(2*(tau + lambda*sum(X[V_m, d]^2))))
-                        theta_md <- rbinom(1, 1, w[d]/(w[d] + (1 - w[d])*C_md))
-                        Beta[m, d] <- ifelse(theta_md == 1, 0, rnorm(1, (lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*%
-                                                                                         Beta[m, -d])*X[V_m, d]) +
-                                                                             mu * tau)/(tau + lambda*sum(X[V_m, d]^2)),
-                                                                     1/sqrt(tau + lambda*sum(X[V_m, d]^2))))
-                    }
+                alpha[m] <- rnorm(1, (a_alpha*b_alpha + lambda*sum(y[V_m] - X[V_m,  , drop=F] %*% Beta[m, ]))/
+                                      (length(V_m) * lambda + b_alpha), 1/sqrt(length(V_m) * lambda + b_alpha))
+                for(d in 1:D){
+                    C_md <- sqrt(tau/(tau + lambda*sum(X[V_m, d]^2)))*exp(-0.5*tau*mu^2)*
+                        exp(((mu*tau + lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*% Beta[m, -d])*
+                                                      X[V_m, d]))^2)/(2*(tau + lambda*sum(X[V_m, d]^2))))
+                    theta_md <- rbinom(1, 1, w[d]/(w[d] + (1 - w[d])*C_md))
+                    Beta[m, d] <- ifelse(theta_md == 1, 0, rnorm(1, (lambda*sum((y[V_m] - alpha[m] - X[V_m, -d , drop=F] %*%
+                                                                                     Beta[m, -d])*X[V_m, d]) +
+                                                                         mu * tau)/(tau + lambda*sum(X[V_m, d]^2)),
+                                                                 1/sqrt(tau + lambda*sum(X[V_m, d]^2))))
                 }
             }
 
@@ -1229,20 +1519,56 @@ simulation_func <- function(X, y, prior = "Dirichlet", SS = TRUE, N = 1e5, gamma
                 tau[d] <- rgamma(1, a_tau + nd_Plus/2, b_tau +sum(Beta[,d]^2)/2)
             }
 
+            #update u, independent M-H with a Gamma proposal
+            u.new <- rgamma(1, 50, 1) #need to think about this proposal carefully
+            acpt.mh.u <- min(log.pdf.u(n, Lambda, u.new, c_size, prior) -
+                                 log.pdf.u(n, Lambda, u, c_size, prior) +
+                                 dgamma(u, 50, 1, log = T) - dgamma(u.new, 50, 1, log = T), 0)
+            u <- ifelse(runif(1) <= exp(acpt.mh.u), u.new, u)
+
+            #update \gamma of FDMM and \beta of FBMM
+            if(prior == "Dirichlet"){
+                #update \gamma
+                if(gamma_hyperprior == TRUE){
+                    gamma.new <- rgamma(1, 1, 2)
+                    acpt.mh.gamma <- min(log.pdf.gamma(gamma.new, Lambda, u, a_gamma, b_gamma, c_size) -
+                                             log.pdf.gamma(gamma, Lambda, u, a_gamma, b_gamma, c_size) +
+                                             dgamma(gamma, 1, 2, log = T) - dgamma(gamma.new, 1, 2, log = T), 0)
+                    gamma <- ifelse(runif(1) <= exp(acpt.mh.gamma), gamma.new, gamma)
+                }
+            }
+
+            if(prior == "Bessel"){
+                if(b_bessel_hyperprior == TRUE){
+                    bb_bessel <- b_bessel - 1
+                    bb_bessel.new <- rgamma(1, 2, 10)
+                    acpt.mh.bbel <- min(pdf.b.bel(bb_bessel.new, a_bessel, Lambda, u, a_b_bessel, b_b_bessel, c_size) -
+                                            pdf.b.bel(bb_bessel, a_bessel, Lambda, u, a_b_bessel, b_b_bessel, c_size) +
+                                            dgamma(bb_bessel, 2, 10, log = T) -
+                                            dgamma(bb_bessel.new, 2, 10, log = T), 0)
+                    b_bessel <-ifelse(runif(1) <= exp(acpt.mh.bbel), bb_bessel.new, bb_bessel) + 1
+                }
+            }
+
             Beta_post[[i]] <- as.vector(Beta)
             alpha_post[[i]] <- alpha
             zeta_post[[i]] <- as.vector(zeta)
             lambda_post[i] <- lambda
             eta_post[i] <- eta
             tau_post[i,] <- tau
+            gamma_post[i] <- gamma
+            b_bessel_post[i] <- b_bessel
             w_post[i,] <- w
-            weight_post[[i]] <- S/sum(S)
+            u_post[i] <- u
+
         }
-        sim_res <- list(M_post = M_post, c_post = c_post, k_post = k_post, U = U,
-                        Beta_post = Beta_post, alpha_post = alpha_post, zeta_post = zeta_post,
-                        lambda_post = lambda_post, eta_post = eta_post, tau_post = tau_post,
-                        w_post = w_post, weight_post = weight_post, a_lambda = a_lambda, b_lambda = b_lambda,
-                        a_eta = a_eta, b_eta = b_eta, X = X, y = y)
+        #here, M_post = k_post is purely for ease of use of post process function,
+        #we do not really update M.
+        sim_res <- list(M_post = k_post, c_post = c_post, k_post = k_post, gamma_post = gamma_post,
+                        b_bessel_post = b_bessel_post, Beta_post = Beta_post, alpha_post = alpha_post,
+                        zeta_post = zeta_post, lambda_post = lambda_post, eta_post = eta_post,
+                        tau_post = tau_post, w_post = w_post, u_post = u_post, a_lambda = a_lambda,
+                        b_lambda = b_lambda, a_eta = a_eta, b_eta = b_eta, X = X, y = y)
     }
     sim_res
 }
