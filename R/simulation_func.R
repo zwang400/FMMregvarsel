@@ -1,6 +1,6 @@
 ################################
 #sim functions
-#updated 23/08/13: update joint liklihood functions for the vectorized version
+#updated 23/09/24: update step 1 of marginal algorithm to fix a bug
 ################################
 simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
                          gamma_fixed = 1, a_gamma = 10, b_gamma = 10, a_unif = 0,
@@ -1269,7 +1269,7 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
                         w_post = w_post, u_post = u_post, a_lambda = a_lambda, b_lambda = b_lambda,
                         a_eta = a_eta, b_eta = b_eta, X = X, y = y)
     }
-    if(algorithm == "MAR"){
+     if(algorithm == "MAR"){
         #initializations
         k <- M_init
         Beta <- matrix(rep(-0.1, D*k), ncol = D)
@@ -1282,7 +1282,7 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
         b_bessel <- b_bessel_fixed
         tau <- rep(1, D)
         w <- rep(0, D)
-        c <- sample(1:k, n, replace = T)
+        c <- c(1:k, sample(1:k, n-k, replace = T)) #changed to make sure all k indies appear
         k_post <- rep(0, N)
         c_post <- matrix(0, ncol = n, nrow = N)
         Beta_post <- list(0)
@@ -1298,7 +1298,7 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
 
         #lilelihood function for the ith subject in the mth component
         group_member <- function(i, m, Beta, zeta, lambda, alpha, eta){
-            sum(dnorm(t(X[i,]), zeta[m, ], sqrt(1/eta), log = T)) +
+            sum(dnorm(X[i,], zeta[m, ], sqrt(1/eta), log = T)) +
                 dnorm(y[i], alpha[m] + X[i,]%*%Beta[m,], sqrt(1/lambda), log = T)
         }
 
@@ -1381,13 +1381,15 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
         }
 
         for(i in 1:N){
-            #step 1, update c
             c_size <- as.vector(table(c))
+            #step 1, update c
             for(j in 1:n){
+                c_j_temp <- c[j]
                 k_c <- length(c_size)
-                k_minus <- ifelse(c_size[c[j]] == 1, k_c-1, k_c)
+                k_minus <- ifelse(c_size[c_j_temp] == 1, k_c-1, k_c)
                 h <- k_minus + L_dynamic
-                if(c_size[c[j]] > 1){
+
+                if(c_size[c_j_temp] > 1){
                     #extend Beta, zeta and alpha
                     Beta_ext <- matrix(0, ncol = D, nrow = L_dynamic)
                     for(mm in 1:L_dynamic){
@@ -1400,9 +1402,9 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
                     zeta <- rbind(zeta, zeta_ext)
                     alpha <- c(alpha, alpha_ext)
 
-                    #update cluster sizes after removing jthe subject
+                    #update cluster sizes after removing jth subject
                     n_size <- c_size
-                    n_size[c[j]] <- c_size[c[j]]-1
+                    n_size[c_j_temp] <- c_size[c_j_temp]-1
                 }else{
                     Beta_ext <- matrix(0, ncol = D, nrow = (L_dynamic-1))
                     for(mm in 1:(L_dynamic-1)){
@@ -1413,24 +1415,23 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
                     alpha_ext <- rnorm(L_dynamic-1, a_alpha, 1/sqrt(b_alpha))
 
                     #update cluster sizes
-                    if(c[j] < max(c)){
-                        c_size[c[j]: (k_c-1)] <- c_size[(c[j]+1) : k_c]
+                    if(c_j_temp < max(c)){
+                        c_size[c_j_temp: (k_c-1)] <- c_size[(c_j_temp+1) : k_c]
                         c_size[k_c] <- 1
+
+                        #re-labeling
+                        c[which(c > c_j_temp)] <- c[which(c > c_j_temp)] - 1
+                        c[j] <- k_minus+1
                     }
 
-                    #re-labeling
-                    c[which(c > c[j])] <- c[which(c > c[j])] - 1
-                    c[j] <- k_minus+1
-                    cj <- c[j]
-
-                    Beta_ord <- rbind(Beta[-cj, ], Beta[cj, ])
-                    zeta_ord <- rbind(zeta[-cj, ], zeta[cj, ])
-                    alpha_ord <- c(alpha[-cj], alpha[cj])
+                    Beta_ord <- rbind(Beta[-c_j_temp, ], Beta[c_j_temp, ])
+                    zeta_ord <- rbind(zeta[-c_j_temp, ], zeta[c_j_temp, ])
+                    alpha_ord <- c(alpha[-c_j_temp], alpha[c_j_temp])
                     Beta <- rbind(Beta_ord, Beta_ext)
                     zeta <- rbind(zeta_ord, zeta_ext)
                     alpha <- c(alpha_ord, alpha_ext)
 
-                    #update cluster sizes after removing jthe subject
+                    #update cluster sizes after removing jth subject
                     n_size <- c_size[1:k_minus]
                 }
 
@@ -1572,6 +1573,10 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
     }
     sim_res
 }
+
+
+
+
 
 
 
