@@ -34,7 +34,7 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
         gamma <- gamma_fixed
         tau <- rep(1, D)
         w <- rep(0, D)
-        c <- rep(0, n)
+        c <- c(1:k, sample(1:k, n-k, replace = T)) #changed to make sure all k indies appear
         M_post <- rep(0, N)
         k_post <- rep(0, N)
         c_post <- matrix(0, ncol = n, nrow = N)
@@ -231,7 +231,7 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
         b_bessel <- b_bessel_fixed
         tau <- rep(1, D)
         w <- rep(0, D)
-        c <- rep(0, n)
+        c <- c(1:k, sample(1:k, n-k, replace = T)) #changed to make sure all k indies appear
         M_post <- rep(0, N)
         k_post <- rep(0, N)
         c_post <- matrix(0, ncol = n, nrow = N)
@@ -509,7 +509,7 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
         eta <- 1
         tau <- rep(1, D)
         w <- rep(0, D)
-        c <- rep(0, n)
+        c <- c(1:k, sample(1:k, n-k, replace = T)) #changed to make sure all k indies appear
         M_post <- rep(0, N)
         k_post <- rep(0, N)
         c_post <- matrix(0, ncol = n, nrow = N)
@@ -747,7 +747,7 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
         gamma <- gamma_fixed
         tau <- rep(1, D)
         w <- rep(0, D)
-        c <- rep(0, n)
+        c <- c(1:k, sample(1:k, n-k, replace = T)) #changed to make sure all k indies appear
         M_post <- rep(0, N)
         k_post <- rep(0, N)
         c_post <- matrix(0, ncol = n, nrow = N)
@@ -1025,7 +1025,7 @@ simulation_func <- function(X, y, SS = TRUE, N = 1e5, gamma_hyperprior = TRUE,
         gamma <- gamma_fixed
         tau <- rep(1, D)
         w <- rep(0, D)
-        c <- sample(1:k, n, replace = T)
+        c <- c(1:k, sample(1:k, n-k, replace = T)) #changed to make sure all k indies appear
         k_post <- rep(0, N)
         c_post <- matrix(0, ncol = n, nrow = N)
         Beta_post <- list(0)
